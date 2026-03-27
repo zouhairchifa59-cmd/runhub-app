@@ -1,9 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
-import * as Google from 'expo-auth-session/providers/google';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import * as WebBrowser from 'expo-web-browser';
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -13,10 +11,16 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import AppKeyboardWrapper from '../components/AppKeyboardWrapper';
-import firebase, { auth } from '../constants/firebase';
 
-WebBrowser.maybeCompleteAuthSession();
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import firebase from 'firebase/compat/app';
+import AppKeyboardWrapper from '../components/AppKeyboardWrapper';
+import { auth } from '../constants/firebase';
+
+GoogleSignin.configure({
+  webClientId:
+    '498771923445-lf7u9m4m4kkqk87bjmq9424gh78hh66b.apps.googleusercontent.com',
+});
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -26,64 +30,15 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
 
-  const [request, response, promptAsync] = Google.useAuthRequest({
-    clientId:
-      '498771923445-lf7u9m4m4kkqk87bjmq9424gh78hh66b.apps.googleusercontent.com',
-  });
-
-  useEffect(() => {
-    const handleGoogleResponse = async () => {
-      if (response?.type === 'success') {
-        try {
-          setGoogleLoading(true);
-
-          const idToken = response.authentication?.idToken;
-
-          if (!idToken) {
-            Alert.alert('Error', 'Google login failed: no ID token found.');
-            return;
-          }
-
-          const credential =
-            firebase.auth.GoogleAuthProvider.credential(idToken);
-
-          await auth.signInWithCredential(credential);
-
-          router.replace('/(tabs)/explore');
-        } catch (error: any) {
-          Alert.alert(
-            'Google Login Error',
-            error?.message || 'Something went wrong'
-          );
-        } finally {
-          setGoogleLoading(false);
-        }
-      }
-
-      if (response?.type === 'error') {
-        setGoogleLoading(false);
-        Alert.alert('Error', 'Google login failed.');
-      }
-
-      if (response?.type === 'dismiss') {
-        setGoogleLoading(false);
-      }
-    };
-
-    handleGoogleResponse();
-  }, [response, router]);
-
   const login = async () => {
     if (!email || !password) {
-      Alert.alert('Missing info', 'Please enter your email and password.');
+      Alert.alert('Missing info', 'Please enter email & password');
       return;
     }
 
     try {
       setLoading(true);
-
       await auth.signInWithEmailAndPassword(email.trim(), password);
-
       router.replace('/(tabs)/explore');
     } catch (e: any) {
       Alert.alert('Login Error', e?.message || 'Login failed');
@@ -96,12 +51,23 @@ export default function LoginScreen() {
     try {
       setGoogleLoading(true);
 
-      await promptAsync({
-        useProxy: true,
-      });
+      await GoogleSignin.hasPlayServices();
+      const userInfo = await GoogleSignin.signIn();
+
+const idToken = userInfo.data?.idToken;
+      if (!idToken) {
+        Alert.alert('Error', 'No Google ID token found');
+        return;
+      }
+
+      const credential = firebase.auth.GoogleAuthProvider.credential(idToken);
+      await auth.signInWithCredential(credential);
+
+      router.replace('/(tabs)/explore');
     } catch (error: any) {
+      Alert.alert('Google Login Error', error?.message || 'Something went wrong');
+    } finally {
       setGoogleLoading(false);
-      Alert.alert('Error', error?.message || 'Could not start Google login');
     }
   };
 
@@ -119,12 +85,10 @@ export default function LoginScreen() {
             <Ionicons name="mail-outline" size={20} color="#7F89A8" />
             <TextInput
               placeholder="Email"
-              placeholderTextColor="#999"
               value={email}
               onChangeText={setEmail}
               style={styles.input}
               autoCapitalize="none"
-              keyboardType="email-address"
             />
           </View>
 
@@ -132,7 +96,6 @@ export default function LoginScreen() {
             <Ionicons name="lock-closed-outline" size={20} color="#7F89A8" />
             <TextInput
               placeholder="Password"
-              placeholderTextColor="#999"
               value={password}
               onChangeText={setPassword}
               secureTextEntry
@@ -157,7 +120,7 @@ export default function LoginScreen() {
           <Pressable
             style={styles.googleBtn}
             onPress={handleGoogleLogin}
-            disabled={!request || googleLoading || loading}
+            disabled={googleLoading || loading}
           >
             {googleLoading ? (
               <ActivityIndicator color="#4285F4" />
@@ -184,31 +147,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: 20,
   },
-
   card: {
     backgroundColor: '#fff',
     borderRadius: 28,
     padding: 22,
-    shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
     elevation: 5,
   },
-
   logo: {
     fontSize: 14,
     fontWeight: '900',
     color: '#0E4FD0',
     marginBottom: 6,
   },
-
   title: {
     fontSize: 26,
     fontWeight: '900',
     marginBottom: 20,
-    color: '#1F2434',
   },
-
   inputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -217,14 +172,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     marginBottom: 12,
   },
-
   input: {
     flex: 1,
     padding: 14,
     marginLeft: 6,
-    color: '#111',
   },
-
   button: {
     backgroundColor: '#16A34A',
     padding: 16,
@@ -232,37 +184,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 10,
   },
-
   buttonText: {
     color: 'white',
     fontWeight: '900',
-    fontSize: 16,
   },
-
   or: {
     textAlign: 'center',
     marginVertical: 14,
     color: '#7F89A8',
-    fontWeight: '600',
   },
-
   googleBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#fff',
     borderWidth: 1,
-    borderColor: '#E5E7EB',
     padding: 14,
     borderRadius: 16,
   },
-
   googleText: {
     marginLeft: 8,
     fontWeight: '800',
-    color: '#1F2434',
   },
-
   link: {
     marginTop: 16,
     textAlign: 'center',
