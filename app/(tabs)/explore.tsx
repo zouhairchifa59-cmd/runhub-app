@@ -1,11 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Animated,
   Dimensions,
   Image,
+  Linking,
   Modal,
   PanResponder,
   Pressable,
@@ -50,11 +52,67 @@ type ExploreUser = {
   surface?: string;
   goal?: string;
   level?: string;
+  latitude?: number;
+  longitude?: number;
 };
 
 type FilterSex = 'Male' | 'Female' | '';
 type FilterRunType = 'Road' | 'Trail' | '';
 type YesNoFilter = 'Yes' | 'No' | '';
+type LocationFilter = 'same-city' | 'nearby' | 'all';
+type LocationStatus = 'checking' | 'granted' | 'denied' | 'unsupported';
+
+const NEARBY_RADIUS_KM = 25;
+
+function normalizeCity(city?: string) {
+  return (city || '').trim().toLowerCase();
+}
+
+function getDistanceKm(
+  aLat: number,
+  aLng: number,
+  bLat: number,
+  bLng: number
+) {
+  const toRad = (value: number) => (value * Math.PI) / 180;
+  const earthRadiusKm = 6371;
+  const dLat = toRad(bLat - aLat);
+  const dLng = toRad(bLng - aLng);
+
+  const haversine =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(aLat)) *
+      Math.cos(toRad(bLat)) *
+      Math.sin(dLng / 2) *
+      Math.sin(dLng / 2);
+
+  const c = 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+  return earthRadiusKm * c;
+}
+
+function readCoordinates(data: any) {
+  const latCandidates = [
+    data?.latitude,
+    data?.lat,
+    data?.locationLat,
+    data?.coords?.latitude,
+  ];
+  const lngCandidates = [
+    data?.longitude,
+    data?.lng,
+    data?.locationLng,
+    data?.coords?.longitude,
+  ];
+
+  const lat = latCandidates.find((value) => typeof value === 'number');
+  const lng = lngCandidates.find((value) => typeof value === 'number');
+
+  if (typeof lat !== 'number' || typeof lng !== 'number') {
+    return null;
+  }
+
+  return { latitude: lat, longitude: lng };
+}
 
 function FilterOptionButton({
   label,
@@ -111,37 +169,176 @@ export default function ExploreScreen() {
   const [selectedSex, setSelectedSex] = useState<FilterSex>('');
   const [selectedRunType, setSelectedRunType] = useState<FilterRunType>('');
   const [selectedDog, setSelectedDog] = useState<YesNoFilter>('');
+  const [selectedLocationFilter, setSelectedLocationFilter] =
+    useState<LocationFilter>('same-city');
 
   const [draftSex, setDraftSex] = useState<FilterSex>('');
   const [draftRunType, setDraftRunType] = useState<FilterRunType>('');
   const [draftDog, setDraftDog] = useState<YesNoFilter>('');
+  const [draftLocationFilter, setDraftLocationFilter] =
+    useState<LocationFilter>('same-city');
 
   const [matchVisible, setMatchVisible] = useState(false);
   const [matchMessage, setMatchMessage] = useState('');
   const [matchedUser, setMatchedUser] = useState<ExploreUser | null>(null);
+  const [isSwiping, setIsSwiping] = useState(false);
+  const [currentUserCity, setCurrentUserCity] = useState('');
+  const [currentUserCoords, setCurrentUserCoords] = useState<{
+    latitude: number;
+    longitude: number;
+  } | null>(null);
+  const [locationStatus, setLocationStatus] =
+    useState<LocationStatus>('checking');
+  const [lastLocationSyncAt, setLastLocationSyncAt] = useState<number | null>(
+    null
+  );
 
   const position = useRef(new Animated.ValueXY()).current;
+  const watchIdRef = useRef<number | null>(null);
+  const lastSyncedLocationRef = useRef<{
+    latitude: number;
+    longitude: number;
+    at: number;
+  } | null>(null);
+
+  const syncLiveLocation = useCallback(
+    async (latitude: number, longitude: number) => {
+      if (!currentUser?.uid) return;
+
+      const last = lastSyncedLocationRef.current;
+      const now = Date.now();
+
+      if (last) {
+        const movedKm = getDistanceKm(
+          last.latitude,
+          last.longitude,
+          latitude,
+          longitude
+        );
+        const movedMeters = movedKm * 1000;
+        const elapsedMs = now - last.at;
+
+        if (movedMeters < 50 && elapsedMs < 30_000) {
+          return;
+        }
+      }
+
+      lastSyncedLocationRef.current = {
+        latitude,
+        longitude,
+        at: now,
+      };
+
+      setCurrentUserCoords({ latitude, longitude });
+      setLastLocationSyncAt(now);
+      setLocationStatus('granted');
+
+      await db.collection('users').doc(currentUser.uid).set(
+        {
+          latitude,
+          longitude,
+          locationUpdatedAt: new Date(),
+        },
+        { merge: true }
+      );
+    },
+    [currentUser?.uid]
+  );
 
   useEffect(() => {
-    loadUsers();
-  }, []);
+    if (!currentUser?.uid) return;
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      setLocationStatus('unsupported');
+      return;
+    }
 
-  const filterUsers = (
+    setLocationStatus('checking');
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        void syncLiveLocation(
+          position.coords.latitude,
+          position.coords.longitude
+        );
+      },
+      () => {
+        setLocationStatus('denied');
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 10000,
+      }
+    );
+
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (position) => {
+        void syncLiveLocation(
+          position.coords.latitude,
+          position.coords.longitude
+        );
+      },
+      () => {
+        setLocationStatus('denied');
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 20000,
+        maximumAge: 15000,
+      }
+    );
+
+    return () => {
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
+    };
+  }, [currentUser?.uid, syncLiveLocation]);
+
+  const filterUsers = useCallback((
     sourceUsers: ExploreUser[],
     sexFilter: FilterSex,
     runTypeFilter: FilterRunType,
-    dogFilter: YesNoFilter
+    dogFilter: YesNoFilter,
+    locationFilter: LocationFilter
   ) => {
     return sourceUsers.filter((user) => {
       const sexOk = !sexFilter || user.sex === sexFilter;
       const runTypeOk = !runTypeFilter || user.runType === runTypeFilter;
       const dogOk = !dogFilter || user.runWithDog === dogFilter;
+      const normalizedCurrentCity = normalizeCity(currentUserCity);
+      const normalizedUserCity = normalizeCity(user.city);
 
-      return sexOk && runTypeOk && dogOk;
+      let locationOk = true;
+
+      if (locationFilter === 'same-city') {
+        locationOk =
+          !normalizedCurrentCity || normalizedCurrentCity === normalizedUserCity;
+      } else if (locationFilter === 'nearby') {
+        if (
+          currentUserCoords &&
+          typeof user.latitude === 'number' &&
+          typeof user.longitude === 'number'
+        ) {
+          locationOk =
+            getDistanceKm(
+              currentUserCoords.latitude,
+              currentUserCoords.longitude,
+              user.latitude,
+              user.longitude
+            ) <= NEARBY_RADIUS_KM;
+        } else {
+          locationOk =
+            !normalizedCurrentCity || normalizedCurrentCity === normalizedUserCity;
+        }
+      }
+
+      return sexOk && runTypeOk && dogOk && locationOk;
     });
-  };
+  }, [currentUserCity, currentUserCoords]);
 
-  const loadUsers = async () => {
+  const loadUsers = useCallback(async () => {
     try {
       if (!currentUser?.uid) {
         setLoading(false);
@@ -149,6 +346,12 @@ export default function ExploreScreen() {
       }
 
       const currentUid = currentUser.uid;
+      const currentUserDoc = await db.collection('users').doc(currentUid).get();
+      const currentUserData = (currentUserDoc.data() as any) || {};
+      const currentCoords = readCoordinates(currentUserData);
+
+      setCurrentUserCity(currentUserData?.city || '');
+      setCurrentUserCoords(currentCoords);
 
       const [usersSnapshot, likesSnapshot, passesSnapshot, matchesSnapshot] =
         await Promise.all([
@@ -204,6 +407,8 @@ export default function ExploreScreen() {
           surface: data?.surface || '',
           goal: data?.goal || '',
           level: data?.level || '',
+          latitude: readCoordinates(data)?.latitude,
+          longitude: readCoordinates(data)?.longitude,
         });
       });
 
@@ -211,7 +416,8 @@ export default function ExploreScreen() {
         list,
         selectedSex,
         selectedRunType,
-        selectedDog
+        selectedDog,
+        selectedLocationFilter
       );
 
       setAllUsers(list);
@@ -223,23 +429,43 @@ export default function ExploreScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [
+    currentUser?.uid,
+    filterUsers,
+    position,
+    selectedDog,
+    selectedLocationFilter,
+    selectedRunType,
+    selectedSex,
+  ]);
+
+  useEffect(() => {
+    loadUsers();
+  }, [loadUsers]);
 
   const openFilters = () => {
     setDraftSex(selectedSex);
     setDraftRunType(selectedRunType);
     setDraftDog(selectedDog);
+    setDraftLocationFilter(selectedLocationFilter);
     setFiltersVisible(true);
   };
 
   const closeFilters = () => setFiltersVisible(false);
 
   const applyFilters = () => {
-    const filtered = filterUsers(allUsers, draftSex, draftRunType, draftDog);
+    const filtered = filterUsers(
+      allUsers,
+      draftSex,
+      draftRunType,
+      draftDog,
+      draftLocationFilter
+    );
 
     setSelectedSex(draftSex);
     setSelectedRunType(draftRunType);
     setSelectedDog(draftDog);
+    setSelectedLocationFilter(draftLocationFilter);
 
     setUsers(filtered);
     setCurrentIndex(0);
@@ -251,25 +477,56 @@ export default function ExploreScreen() {
     setDraftSex('');
     setDraftRunType('');
     setDraftDog('');
+    setDraftLocationFilter('same-city');
   };
 
   const clearAllFilters = () => {
     setSelectedSex('');
     setSelectedRunType('');
     setSelectedDog('');
+    setSelectedLocationFilter('same-city');
 
     setDraftSex('');
     setDraftRunType('');
     setDraftDog('');
+    setDraftLocationFilter('same-city');
 
-    setUsers(allUsers);
+    const filtered = filterUsers(allUsers, '', '', '', 'same-city');
+    setUsers(filtered);
     setCurrentIndex(0);
     position.setValue({ x: 0, y: 0 });
   };
 
   const hasActiveFilters = Boolean(
-    selectedSex || selectedRunType || selectedDog
+    selectedSex ||
+      selectedRunType ||
+      selectedDog ||
+      selectedLocationFilter !== 'same-city'
   );
+
+  const locationStatusText =
+    locationStatus === 'granted'
+      ? `Live location ${lastLocationSyncAt ? '• updated' : ''}`
+      : locationStatus === 'checking'
+      ? 'Checking location...'
+      : locationStatus === 'denied'
+      ? 'Location denied'
+      : 'Location unavailable';
+
+  const locationStatusColor =
+    locationStatus === 'granted'
+      ? '#0D9F6E'
+      : locationStatus === 'checking'
+      ? '#C08400'
+      : '#DC2626';
+
+  const handleOpenDeviceSettings = async () => {
+    try {
+      await Linking.openSettings();
+    } catch {
+      Alert.alert('Location', 'Please open device settings manually.');
+    }
+  };
 
   const rotate = position.x.interpolate({
     inputRange: [-width / 2, 0, width / 2],
@@ -301,7 +558,7 @@ export default function ExploreScreen() {
     extrapolate: 'clamp',
   });
 
-  const createMatchIfMutual = async (otherUser: ExploreUser) => {
+  const createMatchIfMutual = useCallback(async (otherUser: ExploreUser) => {
     if (!currentUser?.uid || !otherUser?.id) return;
 
     const otherLikedMe = await db
@@ -338,9 +595,9 @@ export default function ExploreScreen() {
     setMatchedUser(otherUser);
     setMatchMessage('');
     setMatchVisible(true);
-  };
+  }, [currentUser?.uid]);
 
-  const handleLikeSave = async (otherUser: ExploreUser) => {
+  const handleLikeSave = useCallback(async (otherUser: ExploreUser) => {
     if (!currentUser?.uid || !otherUser?.id) return;
 
     await db
@@ -354,9 +611,9 @@ export default function ExploreScreen() {
       });
 
     await createMatchIfMutual(otherUser);
-  };
+  }, [createMatchIfMutual, currentUser?.uid]);
 
-  const handlePassSave = async (otherUserId: string) => {
+  const handlePassSave = useCallback(async (otherUserId: string) => {
     if (!currentUser?.uid) return;
 
     await db
@@ -368,18 +625,21 @@ export default function ExploreScreen() {
         userId: otherUserId,
         passedAt: new Date(),
       });
-  };
+  }, [currentUser?.uid]);
 
-  const moveToNextCard = () => {
+  const moveToNextCard = useCallback(() => {
     position.setValue({ x: 0, y: 0 });
     setCurrentIndex((prev) => prev + 1);
-  };
+  }, [position]);
 
-  const forceSwipe = (direction: 'left' | 'right') => {
-    const x = direction === 'right' ? width + 140 : -width - 140;
+  const forceSwipe = useCallback((direction: 'left' | 'right') => {
+    if (isSwiping) return;
+    setIsSwiping(true);
+
+    const swipeDistance = direction === 'right' ? width + 140 : -width - 140;
 
     Animated.timing(position, {
-      toValue: { x, y: 0 },
+      toValue: { x: swipeDistance, y: 0 },
       duration: 220,
       useNativeDriver: false,
     }).start(async () => {
@@ -399,22 +659,23 @@ export default function ExploreScreen() {
       } catch (error: any) {
         Alert.alert('Error', error?.message || 'Action failed');
       } finally {
+        setIsSwiping(false);
         moveToNextCard();
       }
     });
-  };
+  }, [currentIndex, handleLikeSave, handlePassSave, isSwiping, moveToNextCard, position, users]);
 
-  const resetPosition = () => {
+  const resetPosition = useCallback(() => {
     Animated.spring(position, {
       toValue: { x: 0, y: 0 },
       friction: 5,
       tension: 75,
       useNativeDriver: false,
     }).start();
-  };
+  }, [position]);
 
-  const handlePass = () => forceSwipe('left');
-  const handleLike = () => forceSwipe('right');
+  const handlePass = useCallback(() => forceSwipe('left'), [forceSwipe]);
+  const handleLike = useCallback(() => forceSwipe('right'), [forceSwipe]);
 
   const handleSendMatchMessage = async () => {
     if (!currentUser?.uid || !matchedUser?.id) {
@@ -457,7 +718,8 @@ export default function ExploreScreen() {
     () =>
       PanResponder.create({
         onMoveShouldSetPanResponder: (_, gestureState) =>
-          Math.abs(gestureState.dx) > 6 || Math.abs(gestureState.dy) > 6,
+          !isSwiping &&
+          (Math.abs(gestureState.dx) > 6 || Math.abs(gestureState.dy) > 6),
         onPanResponderMove: (_, gesture) => {
           position.setValue({ x: gesture.dx, y: gesture.dy * 0.08 });
         },
@@ -471,7 +733,7 @@ export default function ExploreScreen() {
           }
         },
       }),
-    [currentIndex, users]
+    [forceSwipe, isSwiping, position, resetPosition]
   );
 
   const renderEmpty = () => {
@@ -638,22 +900,36 @@ export default function ExploreScreen() {
             </View>
 
             <View style={styles.actionsRow}>
-              <Pressable style={styles.skipButton} onPress={handlePass}>
+              <Pressable
+                style={[styles.skipButton, isSwiping && styles.actionDisabled]}
+                onPress={handlePass}
+                disabled={isSwiping}
+              >
                 <Ionicons name="arrow-forward-outline" size={20} color="#8B93AA" />
                 <Text style={styles.skipButtonText}>{i18n.t('skip')}</Text>
               </Pressable>
 
-              <Pressable style={styles.runButtonPressable} onPress={handleLike}>
+              <Pressable
+                style={[styles.runButtonPressable, isSwiping && styles.actionDisabled]}
+                onPress={handleLike}
+                disabled={isSwiping}
+              >
                 <LinearGradient
                   colors={['#28C987', '#52D89A', '#7AE2AF']}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 0 }}
                   style={styles.runTogetherButton}
                 >
-                  <Ionicons name="walk-outline" size={22} color="#fff" />
-                  <Text style={styles.runTogetherText}>
-                    {i18n.t('runTogether')}
-                  </Text>
+                  {isSwiping ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <>
+                      <Ionicons name="walk-outline" size={22} color="#fff" />
+                      <Text style={styles.runTogetherText}>
+                        {i18n.t('runTogether')}
+                      </Text>
+                    </>
+                  )}
                 </LinearGradient>
               </Pressable>
             </View>
@@ -703,13 +979,52 @@ export default function ExploreScreen() {
 
       <SafeAreaView style={styles.safeArea} edges={['top']}>
         <View style={styles.header}>
-          <Image
-            source={{ uri: HEADER_LOGO }}
-            style={styles.headerLogo}
-            resizeMode="contain"
-          />
+          <View style={styles.headerLeft}>
+            <Image
+              source={{ uri: HEADER_LOGO }}
+              style={styles.headerLogo}
+              resizeMode="contain"
+            />
 
-          <Pressable style={styles.floatingFilterBtn} onPress={openFilters}>
+            <View
+              style={[
+                styles.locationStatusChip,
+                { borderColor: locationStatusColor },
+              ]}
+            >
+              <View
+                style={[
+                  styles.locationStatusDot,
+                  { backgroundColor: locationStatusColor },
+                ]}
+              />
+              <Text
+                style={[
+                  styles.locationStatusText,
+                  { color: locationStatusColor },
+                ]}
+              >
+                {locationStatusText}
+              </Text>
+            </View>
+
+            {locationStatus === 'denied' && (
+              <Pressable
+                style={styles.locationSettingsButton}
+                onPress={handleOpenDeviceSettings}
+              >
+                <Text style={styles.locationSettingsButtonText}>
+                  Open location settings
+                </Text>
+              </Pressable>
+            )}
+          </View>
+
+          <Pressable
+            style={styles.floatingFilterBtn}
+            onPress={openFilters}
+            disabled={isSwiping}
+          >
             <Ionicons name="options-outline" size={21} color="#20263A" />
             {hasActiveFilters && <View style={styles.filterDot} />}
           </Pressable>
@@ -759,6 +1074,33 @@ export default function ExploreScreen() {
                     onPress={() =>
                       setDraftSex((prev) => (prev === 'Female' ? '' : 'Female'))
                     }
+                  />
+                </View>
+
+                <Text style={styles.filterGroupTitle}>Location</Text>
+                <View style={styles.filterGrid}>
+                  <FilterOptionButton
+                    label="Same city"
+                    active={draftLocationFilter === 'same-city'}
+                    onPress={() =>
+                      setDraftLocationFilter((prev) =>
+                        prev === 'same-city' ? 'all' : 'same-city'
+                      )
+                    }
+                  />
+                  <FilterOptionButton
+                    label={`Nearby (${NEARBY_RADIUS_KM}km)`}
+                    active={draftLocationFilter === 'nearby'}
+                    onPress={() =>
+                      setDraftLocationFilter((prev) =>
+                        prev === 'nearby' ? 'all' : 'nearby'
+                      )
+                    }
+                  />
+                  <FilterOptionButton
+                    label="All"
+                    active={draftLocationFilter === 'all'}
+                    onPress={() => setDraftLocationFilter('all')}
                   />
                 </View>
 
@@ -860,7 +1202,48 @@ const styles = StyleSheet.create({
   headerLogo: {
     width: 180,
     height: 44,
-    alignSelf: 'center',
+  },
+
+  headerLeft: {
+    alignItems: 'flex-start',
+    paddingRight: 66,
+  },
+
+  locationStatusChip: {
+    marginTop: 4,
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+
+  locationStatusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 999,
+    marginRight: 6,
+  },
+
+  locationStatusText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+
+  locationSettingsButton: {
+    marginTop: 6,
+    backgroundColor: '#FFE5E5',
+    borderRadius: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+
+  locationSettingsButtonText: {
+    color: '#C21D1D',
+    fontSize: 12,
+    fontWeight: '800',
   },
 
   loadingSafeArea: {
@@ -1164,6 +1547,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 10,
     shadowColor: '#2AC98B',
     shadowOpacity: 0.24,
     shadowRadius: 10,
@@ -1257,6 +1641,9 @@ const styles = StyleSheet.create({
     color: '#EAF0FF',
     fontSize: 16,
     fontWeight: '600',
+  },
+  actionDisabled: {
+    opacity: 0.6,
   },
 
   modalOverlay: {
