@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { auth, db, storage } from '../../constants/firebase';
+import i18n, { setAppLocale, supportedLanguages } from '../../translations';
 import { getProfileImage } from '../../utils/avatar';
 import {
   formatDistanceDisplay,
@@ -86,8 +87,9 @@ export default function ProfileScreen() {
   const [profile, setProfile] = useState<UserProfile>({});
   const [loading, setLoading] = useState(true);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [language, setLanguage] = useState(i18n.locale || 'en');
 
-  const loadProfile = async () => {
+  const loadProfile = useCallback(async () => {
     try {
       if (!user?.uid) return;
 
@@ -105,12 +107,12 @@ export default function ProfileScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [user?.email, user?.uid]);
 
   useFocusEffect(
     useCallback(() => {
       loadProfile();
-    }, [user?.uid])
+    }, [loadProfile])
   );
 
   const handlePickImage = async () => {
@@ -189,6 +191,11 @@ export default function ProfileScreen() {
     );
   };
 
+  const handleLanguageChange = (nextLanguage: string) => {
+    setAppLocale(nextLanguage);
+    setLanguage(nextLanguage);
+  };
+
   const confirmDeleteAccount = async () => {
     try {
       if (!user?.uid) return;
@@ -257,6 +264,34 @@ export default function ProfileScreen() {
           />
 
           <Text style={styles.pageTitle}>Profile</Text>
+
+          <View style={styles.languageCard}>
+            <Text style={styles.languageTitle}>Language</Text>
+            <View style={styles.languageRow}>
+              {supportedLanguages.map((lang) => {
+                const active = language === lang;
+                return (
+                  <Pressable
+                    key={lang}
+                    style={[
+                      styles.languageButton,
+                      active && styles.languageButtonActive,
+                    ]}
+                    onPress={() => handleLanguageChange(lang)}
+                  >
+                    <Text
+                      style={[
+                        styles.languageButtonText,
+                        active && styles.languageButtonTextActive,
+                      ]}
+                    >
+                      {lang.toUpperCase()}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
 
           <View style={styles.card}>
             <Pressable onPress={handlePickImage} style={styles.avatarWrap}>
@@ -391,6 +426,48 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: '900',
     marginBottom: 14,
+  },
+
+  languageCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 12,
+    marginBottom: 12,
+  },
+
+  languageTitle: {
+    color: '#1E2F56',
+    fontSize: 14,
+    fontWeight: '800',
+    marginBottom: 8,
+  },
+
+  languageRow: {
+    flexDirection: 'row',
+  },
+
+  languageButton: {
+    borderWidth: 1,
+    borderColor: '#D7E1F5',
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    marginRight: 8,
+    backgroundColor: '#F7F9FF',
+  },
+
+  languageButtonActive: {
+    borderColor: '#1B67E8',
+    backgroundColor: '#EAF1FF',
+  },
+
+  languageButtonText: {
+    color: '#4A5C86',
+    fontWeight: '800',
+  },
+
+  languageButtonTextActive: {
+    color: '#1B67E8',
   },
 
   card: {

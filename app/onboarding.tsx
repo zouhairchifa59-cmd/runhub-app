@@ -78,6 +78,19 @@ export default function OnboardingScreen() {
   const [sex, setSex] = useState<'Male' | 'Female' | ''>('');
   const [saving, setSaving] = useState(false);
 
+  const completedFields = [
+    name.trim(),
+    age.trim(),
+    city.trim(),
+    distance.trim(),
+    pace.trim(),
+    bio.trim(),
+    runType,
+    sex,
+  ].filter(Boolean).length;
+  const totalFields = 8;
+  const progress = completedFields / totalFields;
+
   const handleSave = async () => {
     try {
       if (!currentUser?.uid) {
@@ -153,6 +166,14 @@ export default function OnboardingScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <Text style={styles.title}>Complete your profile</Text>
+        <Text style={styles.progressLabel}>
+          Step completion: {completedFields}/{totalFields}
+        </Text>
+        <View style={styles.progressTrack}>
+          <View
+            style={[styles.progressFill, { width: `${Math.max(progress * 100, 4)}%` }]}
+          />
+        </View>
 
         <View style={styles.formCard}>
           <Text style={styles.label}>Name</Text>
@@ -280,7 +301,26 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 30,
     fontWeight: '900',
-    marginBottom: 18,
+    marginBottom: 8,
+  },
+  progressLabel: {
+    color: '#DCE7FF',
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  progressTrack: {
+    width: '100%',
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    marginBottom: 16,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: '#61DF9F',
   },
   formCard: {
     backgroundColor: '#f7f7f7',

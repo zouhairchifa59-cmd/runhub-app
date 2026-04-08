@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   FlatList,
@@ -78,7 +78,7 @@ export default function ChatDetailsScreen() {
     }
   };
 
-  const loadOtherUser = async () => {
+  const loadOtherUser = useCallback(async () => {
     try {
       if (!otherUid) return;
 
@@ -96,13 +96,13 @@ export default function ChatDetailsScreen() {
 
       setOtherUserPhoto(photo);
       setOtherUserVerified(Boolean(userData?.verified));
-    } catch (error) {
+    } catch {
       setOtherUserPhoto(getProfileImage('', ''));
       setOtherUserVerified(false);
     }
-  };
+  }, [otherUid]);
 
-  const markMatchOpenedAndRead = async () => {
+  const markMatchOpenedAndRead = useCallback(async () => {
     try {
       if (!matchId || !currentUser?.uid) return;
 
@@ -148,11 +148,11 @@ export default function ChatDetailsScreen() {
     } catch (error) {
       console.log('markMatchOpenedAndRead error:', error);
     }
-  };
+  }, [currentUser?.uid, matchId]);
 
   useEffect(() => {
     loadOtherUser();
-  }, [otherUid]);
+  }, [loadOtherUser]);
 
   useEffect(() => {
     if (!matchId || !currentUser?.uid) {
@@ -222,7 +222,7 @@ export default function ChatDetailsScreen() {
         );
       }
     };
-  }, [matchId, currentUser?.uid, otherUid]);
+  }, [currentUser?.uid, markMatchOpenedAndRead, matchId, otherUid]);
 
   const setTyping = async (isTyping: boolean) => {
     try {

@@ -82,7 +82,7 @@ export default function ChatScreen() {
           userData?.runningPace ||
           '—',
       };
-    } catch (error) {
+    } catch {
       return {
         name: 'Runner',
         photo: getProfileImage('', ''),
@@ -124,38 +124,6 @@ export default function ChatScreen() {
     } catch {
       return '';
     }
-  };
-
-  const sortNewMatches = (items: ChatItem[]) => {
-    return [...items].sort((a, b) => {
-      const aTime =
-        getTimeValue(a.matchCreatedAt) ||
-        getTimeValue(a.firstMessageAt) ||
-        getTimeValue(a.lastMessageAt);
-
-      const bTime =
-        getTimeValue(b.matchCreatedAt) ||
-        getTimeValue(b.firstMessageAt) ||
-        getTimeValue(b.lastMessageAt);
-
-      return bTime - aTime;
-    });
-  };
-
-  const sortMessageMatches = (items: ChatItem[]) => {
-    return [...items].sort((a, b) => {
-      const aTime =
-        getTimeValue(a.lastMessageAt) ||
-        getTimeValue(a.firstMessageAt) ||
-        getTimeValue(a.matchCreatedAt);
-
-      const bTime =
-        getTimeValue(b.lastMessageAt) ||
-        getTimeValue(b.firstMessageAt) ||
-        getTimeValue(b.matchCreatedAt);
-
-      return bTime - aTime;
-    });
   };
 
   const loadMatches = useCallback(async () => {
@@ -278,11 +246,42 @@ export default function ChatScreen() {
   }, [matches, search]);
 
   const newMatches = useMemo(() => {
-    return sortNewMatches(filteredMatches.filter((item) => !item.hasMessages));
+    return [...filteredMatches.filter((item) => !item.hasMessages)].sort((a, b) => {
+      const aTime =
+        getTimeValue(a.matchCreatedAt) ||
+        getTimeValue(a.firstMessageAt) ||
+        getTimeValue(a.lastMessageAt);
+
+      const bTime =
+        getTimeValue(b.matchCreatedAt) ||
+        getTimeValue(b.firstMessageAt) ||
+        getTimeValue(b.lastMessageAt);
+
+      return bTime - aTime;
+    });
   }, [filteredMatches]);
 
   const messageMatches = useMemo(() => {
-    return sortMessageMatches(filteredMatches.filter((item) => item.hasMessages));
+    return [...filteredMatches.filter((item) => item.hasMessages)].sort((a, b) => {
+      const aUnread = a.unreadCount > 0 ? 1 : 0;
+      const bUnread = b.unreadCount > 0 ? 1 : 0;
+
+      if (aUnread !== bUnread) {
+        return bUnread - aUnread;
+      }
+
+      const aTime =
+        getTimeValue(a.lastMessageAt) ||
+        getTimeValue(a.firstMessageAt) ||
+        getTimeValue(a.matchCreatedAt);
+
+      const bTime =
+        getTimeValue(b.lastMessageAt) ||
+        getTimeValue(b.firstMessageAt) ||
+        getTimeValue(b.matchCreatedAt);
+
+      return bTime - aTime;
+    });
   }, [filteredMatches]);
 
   const openChat = (item: ChatItem) => {
@@ -331,7 +330,7 @@ export default function ChatScreen() {
               {item.unreadCount > 0 && (
                 <View style={styles.newBadge}>
                   <Text style={styles.newBadgeText}>
-                    {item.unreadCount > 9 ? '9+' : 'NEW'}
+                    {item.unreadCount > 99 ? '99+' : item.unreadCount}
                   </Text>
                 </View>
               )}

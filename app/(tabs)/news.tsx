@@ -26,14 +26,12 @@ type WpPost = {
   title?: WpRendered;
   excerpt?: WpRendered;
   _embedded?: {
-    ['wp:featuredmedia']?: Array<{
+    ['wp:featuredmedia']?: {
       source_url?: string;
-    }>;
-    ['wp:term']?: Array<
-      Array<{
-        name?: string;
-      }>
-    >;
+    }[];
+    ['wp:term']?: {
+      name?: string;
+    }[][];
   };
 };
 

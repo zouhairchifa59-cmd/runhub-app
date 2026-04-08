@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -16,6 +16,10 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { auth, db } from '../constants/firebase';
+import {
+  cancelScheduledReminders,
+  scheduleRaceReminder,
+} from '../lib/notifications';
 import i18n from '../translations';
 import { getProfileImage } from '../utils/avatar';
 
@@ -86,12 +90,13 @@ export default function RaceDetailsScreen() {
   const [loadingRace, setLoadingRace] = useState(true);
   const [joined, setJoined] = useState(false);
   const [joining, setJoining] = useState(false);
+  const [leaving, setLeaving] = useState(false);
   const [loadingParticipants, setLoadingParticipants] = useState(true);
   const [participants, setParticipants] = useState<ParticipantItem[]>([]);
 
   const raceId = String(id || '');
 
-  const loadRace = async () => {
+  const loadRace = useCallback(async () => {
     try {
       if (!raceId) {
         setLoadingRace(false);
@@ -127,9 +132,9 @@ export default function RaceDetailsScreen() {
     } finally {
       setLoadingRace(false);
     }
-  };
+  }, [raceId]);
 
-  const loadParticipants = async () => {
+  const loadParticipants = useCallback(async () => {
     try {
       if (!raceId) {
         setLoadingParticipants(false);
@@ -168,9 +173,9 @@ export default function RaceDetailsScreen() {
     } finally {
       setLoadingParticipants(false);
     }
-  };
+  }, [raceId]);
 
-  const checkJoined = async () => {
+  const checkJoined = useCallback(async () => {
     try {
       if (!user?.uid || !raceId) {
         setJoined(false);
@@ -184,16 +189,16 @@ export default function RaceDetailsScreen() {
       console.log('checkJoined error:', error);
       setJoined(false);
     }
-  };
+  }, [raceId, user?.uid]);
 
   useEffect(() => {
     loadRace();
     loadParticipants();
-  }, [raceId]);
+  }, [loadParticipants, loadRace]);
 
   useEffect(() => {
     checkJoined();
-  }, [user?.uid, raceId]);
+  }, [checkJoined]);
 
   const handleJoin = async () => {
     try {
@@ -220,11 +225,74 @@ export default function RaceDetailsScreen() {
       setJoined(true);
       await loadParticipants();
 
+      if (race?.date) {
+        try {
+          const reminderIds = await Promise.all([
+            scheduleRaceReminder({
+              raceId,
+              raceName: race?.name || 'Your run',
+              raceDate: race.date,
+              raceTime: race.time,
+              minutesBefore: 60 * 24,
+            }),
+            scheduleRaceReminder({
+              raceId,
+              raceName: race?.name || 'Your run',
+              raceDate: race.date,
+              raceTime: race.time,
+              minutesBefore: 60,
+            }),
+          ]);
+
+          const validReminderIds = reminderIds.filter(
+            (id): id is string => typeof id === 'string'
+          );
+
+          if (validReminderIds.length > 0) {
+            await db.collection('race_participants').doc(docId).set(
+              {
+                reminderNotificationIds: validReminderIds,
+              },
+              { merge: true }
+            );
+          }
+        } catch (error) {
+          console.log('schedule reminder error:', error);
+        }
+      }
+
       Alert.alert('Joined!', 'You joined this run');
     } catch (error: any) {
       Alert.alert('Error', error?.message || 'Failed to join run');
     } finally {
       setJoining(false);
+    }
+  };
+
+  const handleLeave = async () => {
+    try {
+      if (!user?.uid || !raceId) return;
+
+      setLeaving(true);
+      const docId = `${raceId}_${user.uid}`;
+      const participantRef = db.collection('race_participants').doc(docId);
+      const participantSnap = await participantRef.get();
+      const data = (participantSnap.data() as any) || {};
+      const reminderIds = Array.isArray(data?.reminderNotificationIds)
+        ? data.reminderNotificationIds
+        : [];
+
+      await participantRef.delete();
+      await cancelScheduledReminders(reminderIds);
+
+      setJoined(false);
+      await loadParticipants();
+
+      Alert.alert('Done', 'You left this run and reminders were canceled.');
+    } catch (error: any) {
+      Alert.alert('Error', error?.message || 'Failed to leave run');
+    } finally {
+      setLeaving(false);
     }
   };
 
@@ -410,10 +478,10 @@ export default function RaceDetailsScreen() {
           <Pressable
             style={[
               styles.primaryButtonShell,
-              (joined || joining) && styles.buttonDisabled,
+              (joined || joining || leaving) && styles.buttonDisabled,
             ]}
             onPress={handleJoin}
-            disabled={joined || joining}
+            disabled={joined || joining || leaving}
           >
             <LinearGradient
               colors={
@@ -435,10 +503,25 @@ export default function RaceDetailsScreen() {
                   ? `${i18n.t('joined')} ✅`
                   : joining
                   ? i18n.t('loading')
+                  : leaving
+                  ? i18n.t('loading')
                   : i18n.t('joinRun')}
               </Text>
             </LinearGradient>
           </Pressable>
+
+          {joined && (
+            <Pressable
+              style={[styles.leaveButton, leaving && styles.buttonDisabled]}
+              onPress={handleLeave}
+              disabled={leaving}
+            >
+              <Ionicons name="exit-outline" size={20} color="#fff" />
+              <Text style={styles.leaveButtonText}>
+                {leaving ? i18n.t('loading') : 'Leave run'}
+              </Text>
+            </Pressable>
+          )}
 
           <Pressable
             style={[
@@ -711,6 +794,23 @@ const styles = StyleSheet.create({
   primaryButtonText: {
     color: '#FFFFFF',
     fontSize: 17,
+    fontWeight: '900',
+    marginLeft: 8,
+  },
+
+  leaveButton: {
+    minHeight: 52,
+    borderRadius: 18,
+    backgroundColor: '#DC2626',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+
+  leaveButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
     fontWeight: '900',
     marginLeft: 8,
   },

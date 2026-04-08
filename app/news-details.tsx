@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
@@ -26,14 +26,12 @@ type WpPostDetails = {
   title?: WpRendered;
   content?: WpRendered;
   _embedded?: {
-    ['wp:featuredmedia']?: Array<{
+    ['wp:featuredmedia']?: {
       source_url?: string;
-    }>;
-    ['wp:term']?: Array<
-      Array<{
-        name?: string;
-      }>
-    >;
+    }[];
+    ['wp:term']?: {
+      name?: string;
+    }[][];
   };
 };
 
@@ -169,7 +167,7 @@ export default function NewsDetailsScreen() {
     return article ? buildHtmlDocument(article.content) : '';
   }, [article]);
 
-  const loadArticle = async () => {
+  const loadArticle = useCallback(async () => {
     try {
       if (!postId) {
         setLoading(false);
@@ -213,11 +211,11 @@ export default function NewsDetailsScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [postId]);
 
   useEffect(() => {
     loadArticle();
-  }, [postId]);
+  }, [loadArticle]);
 
   const handleShare = async () => {
     try {

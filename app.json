@@ -11,11 +11,18 @@
     "newArchEnabled": true,
 
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "RunHub uses your location to show runners near you in Explore."
+      }
     },
 
     "android": {
       "package": "com.runhub.app",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FF",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
